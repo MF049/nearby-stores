@@ -1,136 +1,120 @@
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:maps_toolkit/maps_toolkit.dart' as maps_toolkit;
 import '../models/store.dart';
-import '../services/database_helper.dart';
+import '../services/database_service.dart';
+import '../services/location_service.dart';
 import '../services/tomtom_service.dart';
 
 class StoreProvider with ChangeNotifier {
   List<Store> _stores = [];
   List<Store> _favoriteStores = [];
-  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
-  final TomTomService _tomtomService = TomTomService();
+  bool _isLoading = false;
   Position? _currentPosition;
 
   List<Store> get stores => _stores;
   List<Store> get favoriteStores => _favoriteStores;
+  bool get isLoading => _isLoading;
   Position? get currentPosition => _currentPosition;
 
+  final DatabaseService _databaseService = DatabaseService.instance;
+  final LocationService _locationService = LocationService();
+  final TomTomService _tomTomService = TomTomService();
+
+  StoreProvider() {
+    loadStores();
+    loadFavoriteStores();
+    getCurrentLocation();
+  }
+
   Future<void> loadStores() async {
-    _stores = await _dbHelper.getAllStores();
-    _favoriteStores = await _dbHelper.getFavoriteStores();
+    _isLoading = true;
+    notifyListeners();
+
+    _stores = await _databaseService.getAllStores();
+    
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> loadFavoriteStores() async {
+    _isLoading = true;
+    notifyListeners();
+
+    _favoriteStores = await _databaseService.getFavoriteStores();
+    
+    _isLoading = false;
     notifyListeners();
   }
 
   Future<void> addStore(Store store) async {
-    await _dbHelper.insertStore(store);
-    await loadStores();
-  }
+    _isLoading = true;
+    notifyListeners();
 
-  Future<void> toggleFavorite(Store store) async {
-    store.isFavorite = !store.isFavorite;
-    await _dbHelper.updateStoreFavorite(store);
-    await loadStores();
-  }
-
-  Future<void> updateCurrentPosition() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      throw Exception('Location services are disabled.');
-    }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        throw Exception('Location permissions are denied.');
-      }
-    }
-
-    _currentPosition = await Geolocator.getCurrentPosition();
+    final storeId = await _databaseService.insertStore(store);
+    _stores.add(store.copyWith(id: storeId));
+    
+    _isLoading = false;
     notifyListeners();
   }
 
-  Future<void> fetchNearbyStores() async {
+  Future<void> addToFavorites(Store store) async {
+    _isLoading = true;
+    notifyListeners();
+
+    await _databaseService.addToFavorites(store);
+    _favoriteStores.add(store.copyWith(isFavorite: true));
+    
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> removeFromFavorites(String id) async {
+    _isLoading = true;
+    notifyListeners();
+
+    await _databaseService.removeFromFavorites(id);
+    _favoriteStores.removeWhere((store) => store.id == id);
+    
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> getCurrentLocation() async {
     try {
-      await updateCurrentPosition();
-      if (_currentPosition == null) {
-        throw Exception('Could not get current position');
-      }
-
-      final nearbyStores = await _tomtomService.fetchNearbyStores(
-        _currentPosition!.latitude,
-        _currentPosition!.longitude,
-      );
-
-      // Calculate distances for all stores
-      final stores = await Future.wait(
-        nearbyStores.map((store) async {
-          final distanceData = await getDistanceToStore(store);
-          return store.copyWith(
-            distance: distanceData['straight_distance'],
-            direction: distanceData['direction'],
-          );
-        }),
-      );
-
-      // Save stores to local database
-      for (var store in stores) {
-        await addStore(store);
-      }
-
-      await loadStores();
-    } catch (e) {
-      // If API fails, try to load cached stores
-      _stores = await _tomtomService.loadSavedStores();
+      _currentPosition = await _locationService.getCurrentLocation();
       notifyListeners();
-      rethrow;
+    } catch (e) {
+      print('Error getting current location: $e');
     }
   }
 
-  Future<Map<String, dynamic>> getDistanceToStore(Store store) async {
+  Future<double> getDistanceToStore(Store store) async {
     if (_currentPosition == null) {
-      await updateCurrentPosition();
-    }
-
-    if (_currentPosition == null) {
-      throw Exception('Could not get current position');
+      await getCurrentLocation();
     }
     
-    // Calculate straight-line distance using Geolocator
-    double distanceInMeters = Geolocator.distanceBetween(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-      store.latitude,
-      store.longitude,
-    );
-
-    // Calculate road distance using Maps Toolkit (Spherical)
-    double sphericalDistance = maps_toolkit.SphericalUtil.computeDistanceBetween(
-      maps_toolkit.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-      maps_toolkit.LatLng(store.latitude, store.longitude),
-    ).toDouble();
-
-    // Calculate bearing (direction) to the store
-    double bearing = maps_toolkit.SphericalUtil.computeHeading(
-      maps_toolkit.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-      maps_toolkit.LatLng(store.latitude, store.longitude),
-    ).toDouble();
-
-    // Convert bearing to cardinal direction
-    String direction = _getCardinalDirection(bearing);
-
-    return {
-      'straight_distance': distanceInMeters / 1000, // Convert to kilometers
-      'spherical_distance': sphericalDistance / 1000, // Convert to kilometers
-      'direction': direction,
-      'bearing': bearing,
-    };
+    if (_currentPosition != null) {
+      // Try TomTom API first
+      double apiDistance = await _tomTomService.getDistance(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        store.latitude,
+        store.longitude
+      );
+      
+      // If API fails, calculate locally
+      if (apiDistance <= 0) {
+        return _locationService.calculateDistance(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          store.latitude,
+          store.longitude
+        );
+      }
+      
+      return apiDistance;
+    }
+    
+    return 0.0;
   }
-
-  String _getCardinalDirection(double bearing) {
-    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-    var index = ((bearing + 22.5) % 360) ~/ 45;
-    return directions[index];
-  }
-} 
+}

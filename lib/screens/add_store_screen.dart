@@ -29,6 +29,7 @@ class _AddStoreScreenState extends State<AddStoreScreen> {
   void _submitForm() {
     if (_formKey.currentState!.validate()) {
       final store = Store(
+        id: _nameController.text,
         name: _nameController.text,
         address: _addressController.text,
         latitude: double.parse(_latitudeController.text),
