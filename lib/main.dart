@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:store_finder/models/store.dart';
-import 'package:store_finder/providers/auth_provider.dart';
-import 'package:store_finder/providers/location_provider.dart';
-import 'package:store_finder/providers/store_provider.dart';
+import 'package:store_finder/riverpod/auth_provider.dart';
 import 'package:store_finder/screens/favorite_stores_screen.dart';
 import 'package:store_finder/screens/login_screen.dart';
 import 'package:store_finder/screens/signup_screen.dart';
@@ -11,6 +9,11 @@ import 'package:store_finder/screens/store_distance_screen.dart';
 import 'package:store_finder/screens/home_screen.dart';
 import 'package:store_finder/screens/store_list.dart';
 import 'package:store_finder/services/database_service.dart';
+
+// Simple providers for backwards compatibility during transition
+final authProvider = Provider<AuthNotifier>((ref) => throw UnimplementedError());
+final storeProvider = Provider((ref) => throw UnimplementedError());
+final locationProvider = Provider((ref) => throw UnimplementedError());
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,22 +23,17 @@ void main() async {
     await dbService.initializeDatabase();
   }
   runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => StoreProvider()),
-        ChangeNotifierProvider(create: (_) => LocationProvider()),
-      ],
-      child: const MyApp(),
+    const ProviderScope(
+      child: MyApp(),
     ),
   );
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
       title: 'Store Finder',
       theme: ThemeData(
@@ -65,18 +63,17 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AuthWrapper extends StatelessWidget {
+class AuthWrapper extends ConsumerWidget {
   const AuthWrapper({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authNotifierProvider);
 
-    if (authProvider.isAuthenticated) {
+     if (authState.isAuthenticated) {
       return const StoreListScreen();
     } else {
       return const LoginScreen();
-      //return const HomeScreen();
     }
   }
 }

@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/auth_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../riverpod/auth_provider.dart';
 import 'signup_screen.dart';
 import 'store_list.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -24,33 +24,44 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _submitForm() async {
+  void _submitForm() {
     if (_formKey.currentState?.validate() ?? false) {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      // Using ref to get the AuthNotifier
+      final authNotifier = ref.read(authNotifierProvider.notifier);
 
-      final success = await authProvider.login(
+      // Call login method on the notifier
+      authNotifier.login(
         _emailController.text,
         _passwordController.text,
       );
-
-      if (success && mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const StoreListScreen()),
-        );
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Invalid email or password'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
+    // Watch the auth state
+    final authState = ref.watch(authNotifierProvider);
+    
+    // Navigate to store list screen if authenticated
+    if (authState.isAuthenticated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const StoreListScreen()),
+        );
+      });
+    }
+    
+    // Show error message if there is one
+    if (authState.errorMessage != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(authState.errorMessage!),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      });
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -189,9 +200,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               elevation: 4,
                             ),
-                            onPressed:
-                                authProvider.isLoading ? null : _submitForm,
-                            child: authProvider.isLoading
+                            onPressed: authState.isLoading ? null : _submitForm,
+                            child: authState.isLoading
                                 ? const CircularProgressIndicator(
                                     color: Colors.white)
                                 : const Text(
